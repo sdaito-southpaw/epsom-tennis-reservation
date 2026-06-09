@@ -1,4 +1,15 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(Remove-Item \"c:\\\\Users\\\\spall\\\\projects\\\\epsom-tennis-reservation\\\\docs\\\\output\\\\02_システム要件定義書.md\")",
+      "Bash(Remove-Item \"c:\\\\Users\\\\spall\\\\projects\\\\epsom-tennis-reservation\\\\docs\\\\output\\\\03_AI体制図.md\")",
+      "PowerShell(Remove-Item \"c:\\\\Users\\\\spall\\\\projects\\\\epsom-tennis-reservation\\\\docs\\\\output\\\\03_AI�̐��}.md\" -Confirm:$false)",
+      "Bash(cp -r __TRACKED_VAR__/_template __TRACKED_VAR__/projects/sns-post-checker)",
+      "Bash(rm -rf __TRACKED_VAR__/projects/sns-post-checker/.git __TRACKED_VAR__/projects/sns-post-checker/skills __TRACKED_VAR__/projects/sns-post-checker/README.md)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\spall\\\\projects\\\\epsom-tennis-reservation\" -Recurse -File)",
+      "Bash(Select-Object FullName)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
