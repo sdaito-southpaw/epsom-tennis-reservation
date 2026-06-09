@@ -17,6 +17,26 @@ function doGet(e) {
   if (action === 'diagnose' && token === getProp('DASHBOARD_TOKEN')) {
     return liffApiResponse(runDiagnose());
   }
+  // LIFFエンドポイントURL更新（テスト用）
+  if (action === 'updateLiffEndpoint' && token === getProp('DASHBOARD_TOKEN')) {
+    const newUrl = e.parameter.url;
+    if (!newUrl) return liffApiResponse({ ok: false, error: 'url required' });
+    try {
+      const liffId = getProp('LIFF_ID');
+      const lineToken = getProp('LINE_CHANNEL_ACCESS_TOKEN');
+      const res = UrlFetchApp.fetch(`https://api.line.me/liff/v1/apps/${liffId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${lineToken}` },
+        payload: JSON.stringify({ view: { type: 'full', url: newUrl } }),
+        muteHttpExceptions: true,
+      });
+      const body = res.getContentText();
+      const status = res.getResponseCode();
+      return liffApiResponse({ ok: status === 200, status, body });
+    } catch (err) {
+      return liffApiResponse({ ok: false, error: err.toString() });
+    }
+  }
   // LINE push送信テスト（テスト用）
   if (action === 'testPush' && token === getProp('DASHBOARD_TOKEN')) {
     const targetUserId = e.parameter.userId;
@@ -63,28 +83,13 @@ function doGet(e) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-// LIFF向けフォーム送信を受け付けるPOSTエンドポイント
-function doPost(e) {
-  try {
-    const data = JSON.parse(e.postData.contents);
-    if (data.action === 'submitLiff') {
-      const result = submitLiffApplication(data);
-      return liffApiResponse(result);
-    }
-    return liffApiResponse({ success: false, error: '不明なアクションです。' });
-  } catch (err) {
-    Logger.log('doPost error: ' + err.toString());
-    return liffApiResponse({ success: false, error: err.toString() });
-  }
-}
-
 // JSON APIレスポンスを生成する
 function liffApiResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// LIFF向けイベント一覧を返す（募集終了日が今日以降のもの）
+// LIFF向けイベント一覧を返す（募集終了日が今日以降のもの・詳細フィールド含む）
 function getLiffEventsJson() {
   try {
     const today = new Date();
@@ -96,6 +101,10 @@ function getLiffEventsJson() {
         resultSheetName: ev.resultSheetName,
         eventDate:       ev.eventDate   ? Utilities.formatDate(ev.eventDate,   'Asia/Tokyo', 'yyyy/MM/dd') : '',
         closingDate:     ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
+        eventTime:       ev.eventTime   || '',
+        venue:           ev.venue       || '',
+        coachName:       ev.coachName   || '',
+        description:     ev.description || '',
       }));
   } catch (err) {
     Logger.log('getLiffEventsJson error: ' + err.toString());
@@ -130,15 +139,15 @@ function getEventsData() {
 
     return {
       name: ev.name,
-      eventDate: ev.eventDate ? Utilities.formatDate(ev.eventDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
+      eventDate:   ev.eventDate   ? Utilities.formatDate(ev.eventDate,   'Asia/Tokyo', 'yyyy/MM/dd') : '',
       closingDate: ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
       appSheetName: ev.appSheetName,
       resultSheetName: ev.resultSheetName,
-      appCount,
-      winCount,
-      loseCount,
-      sentCount,
-      pendingCount,
+      eventTime:   ev.eventTime   || '',
+      venue:       ev.venue       || '',
+      coachName:   ev.coachName   || '',
+      description: ev.description || '',
+      appCount, winCount, loseCount, sentCount, pendingCount,
     };
   });
 }
@@ -339,6 +348,33 @@ function getDashboardHtml() {
 
 '<!-- イベント一覧タブ -->' +
 '<div id="tab-events">' +
+'<div class="d-flex align-items-center gap-2 mb-2">' +
+'<button class="btn btn-success btn-sm" onclick="showNewEventModal()">＋ イベントを新規登録</button>' +
+'</div>' +
+'<!-- イベント新規作成モーダル -->' +
+'<div id="newEventModal" class="card p-3 mb-3" style="display:none;border:2px solid #198754">' +
+'<h6 class="mb-3">📋 新しいイベントを登録</h6>' +
+'<div class="row g-2">' +
+'<div class="col-12"><label class="form-label fw-bold">イベント名<span class="text-danger">*</span></label>' +
+'<input type="text" class="form-control" id="ne_name" placeholder="コーチAレッスン 7月15日"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">開催日<span class="text-danger">*</span></label>' +
+'<input type="text" class="form-control" id="ne_date" placeholder="2026/07/15"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">募集終了日<span class="text-danger">*</span></label>' +
+'<input type="text" class="form-control" id="ne_closing" placeholder="2026/07/10"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">開催時間</label>' +
+'<input type="text" class="form-control" id="ne_time" placeholder="10:00〜16:00"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">開催場所</label>' +
+'<input type="text" class="form-control" id="ne_venue" placeholder="渋谷テニスコート"></div>' +
+'<div class="col-12"><label class="form-label fw-bold">コーチ名</label>' +
+'<input type="text" class="form-control" id="ne_coach" placeholder="山田 コーチ"></div>' +
+'<div class="col-12"><label class="form-label fw-bold">イベント内容</label>' +
+'<textarea class="form-control" id="ne_desc" rows="3" placeholder="イベントの説明・内容を入力"></textarea></div>' +
+'</div>' +
+'<div class="d-flex gap-2 mt-3 align-items-center">' +
+'<button class="btn btn-success" onclick="submitNewEvent()">登録する</button>' +
+'<button class="btn btn-outline-secondary" onclick="hideNewEventModal()">キャンセル</button>' +
+'<span id="ne_result" class="text-muted small"></span>' +
+'</div></div>' +
 '<div id="eventList" class="row g-2 mb-3"></div>' +
 '<div id="applicantSection" style="display:none">' +
 '<div class="d-flex align-items-center gap-2 mb-2">' +
@@ -436,6 +472,27 @@ function getDashboardHtml() {
 
 'window.onload=function(){loadEvents();};' +
 
+'function showNewEventModal(){document.getElementById("newEventModal").style.display="";}' +
+'function hideNewEventModal(){document.getElementById("newEventModal").style.display="none";document.getElementById("ne_result").textContent="";}' +
+'function submitNewEvent(){' +
+'var name=document.getElementById("ne_name").value.trim();' +
+'var date=document.getElementById("ne_date").value.trim();' +
+'var closing=document.getElementById("ne_closing").value.trim();' +
+'var time=document.getElementById("ne_time").value.trim();' +
+'var venue=document.getElementById("ne_venue").value.trim();' +
+'var coach=document.getElementById("ne_coach").value.trim();' +
+'var desc=document.getElementById("ne_desc").value.trim();' +
+'if(!name||!date||!closing){alert("イベント名・開催日・募集終了日は必須です。");return;}' +
+'var res=document.getElementById("ne_result");res.textContent="登録中...";' +
+'google.script.run' +
+'.withSuccessHandler(function(r){' +
+'if(r.success){res.textContent="✅ 登録完了（"+r.eventDate+" 開催）";setTimeout(function(){hideNewEventModal();loadEvents();},1500);}' +
+'else{res.textContent="❌ "+r.error;}' +
+'})' +
+'.withFailureHandler(function(e){res.textContent="❌ "+e.message;})' +
+'.createNewEvent({name:name,eventDate:date,closingDate:closing,eventTime:time,venue:venue,coachName:coach,description:desc});' +
+'}' +
+
 'function showTab(t){' +
 'document.getElementById("tab-events").style.display=t==="events"?"":"none";' +
 'document.getElementById("tab-broadcast").style.display=t==="broadcast"?"":"none";' +
@@ -464,10 +521,14 @@ function getDashboardHtml() {
 'var badge=ev.pendingCount>0?"<span class=\'badge badge-pending ms-1\'>"+ev.pendingCount+"件未送信</span>":"";' +
 'var div=document.createElement("div");' +
 'div.className="col-md-4 col-lg-3";' +
+'var detail=(ev.coachName?"<div class=\'text-muted small\'>👤 "+ev.coachName+"</div>":"")+' +
+'(ev.eventTime?"<div class=\'text-muted small\'>🕐 "+ev.eventTime+"</div>":"")+' +
+'(ev.venue?"<div class=\'text-muted small\'>📍 "+ev.venue+"</div>":"");' +
 'div.innerHTML="<div class=\'card event-card h-100 border\' onclick=\'selectEvent("+idx+")\'>"+' +
 '"<div class=\'card-body py-2\'>"+' +
 '"<div class=\'fw-bold mb-1\'>"+ev.name+badge+"</div>"+' +
 '"<div class=\'text-muted small\'>開催: "+ev.eventDate+" / 締切: "+ev.closingDate+"</div>"+' +
+'detail+' +
 '"<div class=\'small mt-1\'>応募: "+ev.appCount+"名 ／ 当選: "+ev.winCount+"名 ／ 落選: "+ev.loseCount+"名</div>"+' +
 '"</div></div>";' +
 'el.appendChild(div);' +

@@ -2,127 +2,128 @@
 // doGet(?page=liff) からルーティングされる。
 // スクリプトプロパティ LIFF_ID を設定してから使用する。
 
+// GitHub Pages版LIFFにリダイレクト（GAS経由では LINE webview で動作しないため）
 function getLiffPage() {
-  const liffId = getProp('LIFF_ID') || '';
-
-  // イベントデータをHTML生成時に埋め込む（クライアント側のサーバー呼び出しを1回削減）
-  let eventsJson = '[]';
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const events = getAllEvents()
-      .filter(ev => !ev.closingDate || ev.closingDate >= today)
-      .map(ev => ({
-        name:            ev.name,
-        resultSheetName: ev.resultSheetName,
-        eventDate:       ev.eventDate   ? Utilities.formatDate(ev.eventDate,   'Asia/Tokyo', 'yyyy/MM/dd') : '',
-        closingDate:     ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
-      }));
-    eventsJson = JSON.stringify(events);
-  } catch (e) {
-    Logger.log('getLiffPage events error: ' + e);
-  }
-
-  return HtmlService.createHtmlOutput(getLiffHtml(liffId, eventsJson))
-    .setTitle('イベント参加登録')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  const url = 'https://sdaito-southpaw.github.io/epsom-tennis-reservation/liff/';
+  return HtmlService.createHtmlOutput(
+    '<html><head><meta http-equiv="refresh" content="0; url=' + url + '"></head>' +
+    '<body>リダイレクト中... <a href="' + url + '">こちらをクリック</a></body></html>'
+  ).setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-// 会員データのみ返す（イベントデータはHTML生成時に埋め込み済み）
+// 会員データを返す（追加参加者情報も含む）
 function getMemberData(userId) {
   try {
     const membersSheet = getSheet(SHEET.MEMBERS);
     if (!membersSheet || membersSheet.getLastRow() <= 1) return null;
     const data = membersSheet.getDataRange().getValues();
+    let primary = null;
+    const additional = [];
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][1]) === userId) {
-        return {
-          name:          String(data[i][4]  || ''),
-          age:           String(data[i][6]  || ''),
-          gender:        String(data[i][7]  || ''),
-          tennisLevel:   String(data[i][8]  || ''),
-          email:         String(data[i][9]  || ''),
-          phone:         String(data[i][10] || ''),
-          furigana:      String(data[i][11] || ''),
-          emergency:     String(data[i][12] || ''),
-          tennisFreq:    String(data[i][13] || ''),
-          tennisHistory: String(data[i][14] || ''),
-          tennisArea:    String(data[i][15] || ''),
-          tennisEnv:     String(data[i][16] || ''),
-        };
+      const rowId = String(data[i][1]);
+      if (rowId === userId) {
+        primary = extractMemberRow_(data[i]);
+      } else if (rowId.startsWith(userId + '_p')) {
+        additional.push(extractMemberRow_(data[i]));
       }
     }
-    return null;
+    if (!primary) return null;
+    primary.additionalParticipants = additional;
+    return primary;
   } catch (err) {
     Logger.log('getMemberData error: ' + err.toString());
     return null;
   }
 }
 
+function extractMemberRow_(row) {
+  return {
+    name:          String(row[4]  || ''),
+    age:           String(row[6]  || ''),
+    gender:        String(row[7]  || ''),
+    tennisLevel:   String(row[8]  || ''),
+    email:         String(row[9]  || ''),
+    phone:         String(row[10] || ''),
+    furigana:      String(row[11] || ''),
+    emergency:     String(row[12] || ''),
+    tennisFreq:    String(row[13] || ''),
+    tennisHistory: String(row[14] || ''),
+    tennisArea:    String(row[15] || ''),
+    tennisEnv:     String(row[16] || ''),
+  };
+}
+
 // LIFF応募フォームの送信処理（クライアントから呼び出す）
 function submitLiffApplication(data) {
   try {
-    const fullName = (data.familyName + ' ' + data.givenName).trim();
-    const furigana = (data.familyNameKana + ' ' + data.givenNameKana).trim();
-    const areaStr  = (data.tennisArea || []).join('・');
-    const envStr   = (data.tennisEnv  || []).join('・');
-    const srcStr   = (data.eventSource || []).join('・');
-    const rsnStr   = (data.applyReason || []).join('・');
+    const srcStr = (data.eventSource || []).join('・');
+    const rsnStr = (data.applyReason || []).join('・');
 
-    // 会員マスタを更新（存在しない場合は新規追加）
     const membersSheet = getSheet(SHEET.MEMBERS);
-    const membersData  = membersSheet.getDataRange().getValues();
-    let memberRow = -1;
-    for (let i = 1; i < membersData.length; i++) {
-      if (String(membersData[i][1]) === data.userId) { memberRow = i + 1; break; }
-    }
-
-    if (memberRow > 0) {
-      membersSheet.getRange(memberRow, 5).setValue(fullName);
-      membersSheet.getRange(memberRow, 6).setValue(new Date());
-      membersSheet.getRange(memberRow, 7).setValue(data.age);
-      membersSheet.getRange(memberRow, 8).setValue(data.gender);
-      membersSheet.getRange(memberRow, 9).setValue(data.tennisLevel);
-      membersSheet.getRange(memberRow, 10).setValue(data.email || '');
-      membersSheet.getRange(memberRow, 11).setValue(data.phone || '');
-      membersSheet.getRange(memberRow, 12).setValue(furigana);
-      membersSheet.getRange(memberRow, 13).setValue(data.emergency || '');
-      membersSheet.getRange(memberRow, 14).setValue(data.tennisFreq || '');
-      membersSheet.getRange(memberRow, 15).setValue(data.tennisHistory || '');
-      membersSheet.getRange(memberRow, 16).setValue(areaStr);
-      membersSheet.getRange(memberRow, 17).setValue(envStr);
-    } else {
-      membersSheet.appendRow([
-        new Date(), data.userId, '', 'LIFF登録', fullName, new Date(),
-        data.age, data.gender, data.tennisLevel, data.email || '', data.phone || '', furigana,
-        data.emergency || '', data.tennisFreq || '', data.tennisHistory || '', areaStr, envStr,
-      ]);
-    }
-
-    // 各選択イベントの当落シートに応募行を追加
     const ss = SpreadsheetApp.openById(getProp('SPREADSHEET_ID'));
     const appliedNames = [];
-    for (const ev of (data.selectedEvents || [])) {
-      const resultSheet = ss.getSheetByName(ev.resultSheetName);
-      if (!resultSheet) continue;
 
-      const resultData = resultSheet.getDataRange().getValues();
-      let already = false;
-      for (let i = 1; i < resultData.length; i++) {
-        if (String(resultData[i][1]) === data.userId) { already = true; break; }
+    // 主参加者 + 追加参加者をまとめて処理
+    const participants = [{ ...data, _suffix: '' }];
+    (data.additionalParticipants || []).forEach(function(p, idx) {
+      participants.push({ ...p, userId: data.userId + '_p' + (idx + 2), _suffix: '（追加' + (idx + 2) + '人目）' });
+    });
+
+    for (const p of participants) {
+      const fullName = ((p.familyName || '') + ' ' + (p.givenName || '')).trim();
+      const furigana = ((p.familyNameKana || '') + ' ' + (p.givenNameKana || '')).trim();
+      const areaStr  = (p.tennisArea || []).join('・');
+      const envStr   = (p.tennisEnv  || []).join('・');
+      const pUserId  = p.userId;
+
+      // 会員マスタを更新または新規追加
+      const membersData = membersSheet.getDataRange().getValues();
+      let memberRow = -1;
+      for (let i = 1; i < membersData.length; i++) {
+        if (String(membersData[i][1]) === pUserId) { memberRow = i + 1; break; }
       }
-      if (already) continue;
+      if (memberRow > 0) {
+        membersSheet.getRange(memberRow, 5).setValue(fullName);
+        membersSheet.getRange(memberRow, 6).setValue(new Date());
+        membersSheet.getRange(memberRow, 7).setValue(p.age || '');
+        membersSheet.getRange(memberRow, 8).setValue(p.gender || '');
+        membersSheet.getRange(memberRow, 9).setValue(p.tennisLevel || '');
+        membersSheet.getRange(memberRow, 10).setValue(p.email || '');
+        membersSheet.getRange(memberRow, 11).setValue(p.phone || '');
+        membersSheet.getRange(memberRow, 12).setValue(furigana);
+        membersSheet.getRange(memberRow, 13).setValue(p.emergency || '');
+        membersSheet.getRange(memberRow, 14).setValue(p.tennisFreq || '');
+        membersSheet.getRange(memberRow, 15).setValue(p.tennisHistory || '');
+        membersSheet.getRange(memberRow, 16).setValue(areaStr);
+        membersSheet.getRange(memberRow, 17).setValue(envStr);
+      } else {
+        membersSheet.appendRow([
+          new Date(), pUserId, '', 'LIFF登録', fullName, new Date(),
+          p.age || '', p.gender || '', p.tennisLevel || '', p.email || '', p.phone || '', furigana,
+          p.emergency || '', p.tennisFreq || '', p.tennisHistory || '', areaStr, envStr,
+        ]);
+      }
 
-      resultSheet.appendRow([
-        fullName, data.userId, '', '', '',
-        data.coachKnowledge || '', srcStr, rsnStr,
-      ]);
-      logAction(data.userId, 'LIFF応募', ev.resultSheetName.replace('_当落', ''), fullName);
-      appliedNames.push(ev.name);
+      // 各選択イベントの当落シートに応募行を追加
+      for (const ev of (data.selectedEvents || [])) {
+        const resultSheet = ss.getSheetByName(ev.resultSheetName);
+        if (!resultSheet) continue;
+        const resultData = resultSheet.getDataRange().getValues();
+        let already = false;
+        for (let i = 1; i < resultData.length; i++) {
+          if (String(resultData[i][1]) === pUserId) { already = true; break; }
+        }
+        if (already) continue;
+        resultSheet.appendRow([
+          fullName, pUserId, '', '', '',
+          data.coachKnowledge || '', srcStr, rsnStr,
+        ]);
+        logAction(pUserId, 'LIFF応募', ev.resultSheetName.replace('_当落', ''), fullName);
+        if (!appliedNames.includes(ev.name)) appliedNames.push(ev.name);
+      }
     }
 
     const selectedCount = (data.selectedEvents || []).length;
-
     if (selectedCount > 0 && appliedNames.length === 0) {
       return { success: false, error: '選択したイベントはすでに応募済みです。' };
     }
@@ -132,8 +133,9 @@ function submitLiffApplication(data) {
       pushMessage(data.userId,
         `応募を受け付けました！\n\n応募イベント:\n${eventList}\n\n当落結果は後日このLINEでお知らせします。\nしばらくお待ちください。`
       );
+      const mainName = ((data.familyName || '') + ' ' + (data.givenName || '')).trim();
       const nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'MM/dd HH:mm');
-      notifyStaff(`✅ LIFF応募 ${nowStr}\n${fullName}\n${appliedNames.join('、')}`);
+      notifyStaff(`✅ LIFF応募 ${nowStr}\n${mainName}（計${participants.length}名）\n${appliedNames.join('、')}`);
     } else {
       pushMessage(data.userId, 'プロフィール情報を更新しました。ありがとうございます！');
     }

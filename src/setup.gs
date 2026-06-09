@@ -50,6 +50,14 @@ function setupSpreadsheet() {
     membersSheet.getRange(1, 17).setValue('テニス環境');
   }
 
+  // 設定シートのG〜J列ヘッダーを追加（イベント詳細フィールド）
+  if (configSheet.getLastRow() > 0 && !configSheet.getRange(1, 7).getValue()) {
+    configSheet.getRange(1, 7).setValue('開催時間');
+    configSheet.getRange(1, 8).setValue('開催場所');
+    configSheet.getRange(1, 9).setValue('コーチ名');
+    configSheet.getRange(1, 10).setValue('イベント内容');
+  }
+
   // アクション履歴シート
   let actionSheet = ss.getSheetByName(SHEET.ACTION_LOG);
   if (!actionSheet) {
@@ -67,6 +75,63 @@ function setupSpreadsheet() {
     '【次にやること】\n' +
     '「イベント管理 > 新しいイベントをセットアップ」からイベントを追加してください。'
   );
+}
+
+// ダッシュボードからイベントを新規作成する（google.script.runから呼び出す）
+function createNewEvent(data) {
+  try {
+    const { name, eventDate, closingDate, eventTime, venue, coachName, description } = data;
+    if (!name || !eventDate || !closingDate) {
+      return { success: false, error: 'イベント名・開催日・募集終了日は必須です。' };
+    }
+    const ss = SpreadsheetApp.openById(getProp('SPREADSHEET_ID'));
+    const configSheet = ss.getSheetByName(SHEET.CONFIG);
+    if (!configSheet) return { success: false, error: '設定シートが見つかりません。' };
+
+    const evDateObj = new Date(eventDate);
+    if (isNaN(evDateObj.getTime())) return { success: false, error: '開催日の形式が正しくありません（YYYY/MM/DD）。' };
+    const closingDateObj = new Date(closingDate);
+    if (isNaN(closingDateObj.getTime())) return { success: false, error: '募集終了日の形式が正しくありません（YYYY/MM/DD）。' };
+
+    // 同名イベントの重複チェック
+    const configData = configSheet.getDataRange().getValues();
+    for (let i = 1; i < configData.length; i++) {
+      if (String(configData[i][0]).trim() === name.trim()) {
+        return { success: false, error: `同名のイベント「${name}」が既に存在します。` };
+      }
+    }
+
+    // シート名用識別子を生成（シート名に使えない文字を除去）
+    const identifier = name.replace(/[/?\*[\]:\\]/g, '').replace(/\s/g, '').substring(0, 20)
+      + '_' + Utilities.formatDate(evDateObj, 'Asia/Tokyo', 'MMdd');
+    const appSheetName    = identifier + '_応募';
+    const resultSheetName = identifier + '_当落';
+
+    // 当落シートを作成
+    let resultSheet = ss.getSheetByName(resultSheetName);
+    if (!resultSheet) {
+      resultSheet = ss.insertSheet(resultSheetName);
+      resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ']);
+      resultSheet.setFrozenRows(1);
+    }
+
+    // 設定シートに行を追加（G〜J列に詳細情報）
+    configSheet.appendRow([
+      name, evDateObj, closingDateObj, appSheetName, '', '',
+      eventTime || '', venue || '', coachName || '', description || '',
+    ]);
+
+    return {
+      success: true,
+      appSheetName,
+      resultSheetName,
+      eventDate:   Utilities.formatDate(evDateObj,      'Asia/Tokyo', 'yyyy/MM/dd'),
+      closingDate: Utilities.formatDate(closingDateObj, 'Asia/Tokyo', 'yyyy/MM/dd'),
+    };
+  } catch (err) {
+    Logger.log('createNewEvent error: ' + err.toString());
+    return { success: false, error: err.toString() };
+  }
 }
 
 // 新しいイベントをセットアップする。

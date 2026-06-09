@@ -15,7 +15,7 @@ function getSheet(name) {
 }
 
 // 設定シートの全イベント行を返す（1行目はヘッダーのためスキップ）
-// 戻り値: [{ name, eventDate, closingDate, appSheetName, resultSheetName, winMsg, loseMsg }, ...]
+// 戻り値: [{ name, eventDate, closingDate, appSheetName, resultSheetName, winMsg, loseMsg, eventTime, venue, coachName, description }, ...]
 function getAllEvents() {
   const sheet = getSheet(SHEET.CONFIG);
   if (!sheet) return [];
@@ -23,14 +23,20 @@ function getAllEvents() {
   const events = [];
   for (let i = 1; i < data.length; i++) {
     const name = String(data[i][0]).trim();
-    const eventDate = data[i][1] ? new Date(data[i][1]) : null;
-    const closingDate = data[i][2] ? new Date(data[i][2]) : null;
-    const appSheetName = String(data[i][3]).trim();
-    const winMsg = String(data[i][4] || '').trim();  // E列：当選メッセージ
-    const loseMsg = String(data[i][5] || '').trim(); // F列：落選メッセージ
-    if (!name || !appSheetName) continue;
-    const resultSheetName = appSheetName.replace('_応募', '_当落');
-    events.push({ name, eventDate, closingDate, appSheetName, resultSheetName, winMsg, loseMsg });
+    if (!name) continue;
+    const eventDate    = data[i][1] ? new Date(data[i][1]) : null;
+    const closingDate  = data[i][2] ? new Date(data[i][2]) : null;
+    const appSheetName = String(data[i][3] || '').trim();
+    const winMsg       = String(data[i][4] || '').trim();  // E列：当選メッセージ
+    const loseMsg      = String(data[i][5] || '').trim();  // F列：落選メッセージ
+    const eventTime    = String(data[i][6] || '').trim();  // G列：開催時間
+    const venue        = String(data[i][7] || '').trim();  // H列：開催場所
+    const coachName    = String(data[i][8] || '').trim();  // I列：コーチ名
+    const description  = String(data[i][9] || '').trim();  // J列：イベント内容
+    const resultSheetName = appSheetName
+      ? appSheetName.replace('_応募', '_当落')
+      : name.replace(/[/?\*[\]:\\]/g, '').replace(/\s/g, '') + '_当落';
+    events.push({ name, eventDate, closingDate, appSheetName, resultSheetName, winMsg, loseMsg, eventTime, venue, coachName, description });
   }
   return events;
 }

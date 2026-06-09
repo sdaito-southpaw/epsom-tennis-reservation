@@ -1,12 +1,19 @@
-// LINE Webhookのエントリポイント
+// POSTのエントリポイント（LINE WebhookとLIFF応募を両方処理）
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents);
 
-    for (const event of body.events) {
+    // LIFFフォームからの応募送信
+    if (body.action === 'submitLiff') {
+      const result = submitLiffApplication(body);
+      return ContentService.createTextOutput(JSON.stringify(result))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // LINE Webhookイベント処理
+    for (const event of (body.events || [])) {
       if (event.type === 'message' && event.message.type === 'text') {
         const text = event.message.text.trim();
-
         if (text === '応募') {
           handleOubo(event);
         } else if (text === '応募状況') {
