@@ -56,12 +56,10 @@ function extractMemberRow_(row) {
 // LIFF応募フォームの送信処理（クライアントから呼び出す）
 function submitLiffApplication(data) {
   try {
-    const srcStr = (data.eventSource || []).join('・');
-    const rsnStr = (data.applyReason || []).join('・');
-
     const membersSheet = getSheet(SHEET.MEMBERS);
     const ss = SpreadsheetApp.openById(getProp('SPREADSHEET_ID'));
     const appliedNames = [];
+    const appliedParticipantNames = []; // 新規応募した参加者のフルネーム
 
     // 主参加者 + 追加参加者をまとめて処理
     const participants = [{ ...data, _suffix: '' }];
@@ -105,6 +103,7 @@ function submitLiffApplication(data) {
       }
 
       // 各選択イベントの当落シートに応募行を追加
+      let pHasNewApply = false;
       for (const ev of (data.selectedEvents || [])) {
         const resultSheet = ss.getSheetByName(ev.resultSheetName);
         if (!resultSheet) continue;
@@ -114,12 +113,20 @@ function submitLiffApplication(data) {
           if (String(resultData[i][1]) === pUserId) { already = true; break; }
         }
         if (already) continue;
+        const evCoach  = ev.coachKnowledge || data.coachKnowledge || '';
+        const evSrcStr = (ev.eventSource   || data.eventSource   || []).join('・');
+        const evRsnStr = (ev.applyReason   || data.applyReason   || []).join('・');
         resultSheet.appendRow([
           fullName, pUserId, '', '', '',
-          data.coachKnowledge || '', srcStr, rsnStr,
+          evCoach, evSrcStr, evRsnStr, new Date(),
         ]);
         logAction(pUserId, 'LIFF応募', ev.resultSheetName.replace('_当落', ''), fullName);
+        pHasNewApply = true;
         if (!appliedNames.includes(ev.name)) appliedNames.push(ev.name);
+      }
+      // 1件でも新規応募があれば参加者名を記録
+      if (pHasNewApply && fullName && !appliedParticipantNames.includes(fullName)) {
+        appliedParticipantNames.push(fullName);
       }
     }
 
@@ -130,12 +137,15 @@ function submitLiffApplication(data) {
 
     if (appliedNames.length > 0) {
       const eventList = appliedNames.map(n => '・' + n).join('\n');
+      // 名前がある場合は「○○ 様、△△ 様の応募を受け付けました！」、ない場合は従来文
+      const namesPart = appliedParticipantNames.length > 0
+        ? appliedParticipantNames.map(n => n + ' 様').join('、') + 'の'
+        : '';
       pushMessage(data.userId,
-        `応募を受け付けました！\n\n応募イベント:\n${eventList}\n\n当落結果は後日このLINEでお知らせします。\nしばらくお待ちください。`
+        `${namesPart}応募を受け付けました！\n\n応募イベント:\n${eventList}\n\n当落結果は後日このLINEでお知らせします。\nしばらくお待ちください。`
       );
-      const mainName = ((data.familyName || '') + ' ' + (data.givenName || '')).trim();
       const nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'MM/dd HH:mm');
-      notifyStaff(`✅ LIFF応募 ${nowStr}\n${mainName}（計${participants.length}名）\n${appliedNames.join('、')}`);
+      notifyStaff(`✅ LIFF応募 ${nowStr}\n${appliedParticipantNames.join('、')}（計${appliedParticipantNames.length}名）\n${appliedNames.join('、')}`);
     } else {
       pushMessage(data.userId, 'プロフィール情報を更新しました。ありがとうございます！');
     }

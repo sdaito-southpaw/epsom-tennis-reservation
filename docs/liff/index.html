@@ -28,8 +28,9 @@ input:focus{border-color:#06c755;outline:none}
 .opt{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid #eee;border-radius:7px;cursor:pointer}
 .opt input{width:18px;height:18px;flex-shrink:0;cursor:pointer;accent-color:#06c755}
 .opt span{line-height:1.4;font-size:14px}
-.ev-opt{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #eee;border-radius:8px;cursor:pointer;margin-bottom:8px;background:#fafafa}
-.ev-opt:last-child{margin-bottom:0}
+.ev-opt{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #eee;border-radius:8px;cursor:pointer;margin-bottom:0;background:#fafafa}
+.ev-wrap{margin-bottom:8px}
+.ev-detail{padding:12px 14px;background:#f4fff8;border:1px solid #9de0b4;border-top:none;border-radius:0 0 8px 8px}
 .ev-opt input{width:18px;height:18px;flex-shrink:0;margin-top:3px;cursor:pointer;accent-color:#06c755}
 .ev-name{font-weight:bold;font-size:14px;margin-bottom:4px}
 .ev-meta{font-size:12px;color:#555;margin-bottom:3px;line-height:1.6}
@@ -82,8 +83,11 @@ var LIFF_ID = '2010231562-h4nq4P3s';
 var userId = null, eventsData = [], memberData = null;
 var participantCount = 1;
 
-var AREA_OPTS = ['東京','神奈川','千葉','埼玉','その他関東圏','関東圏外'];
-var ENV_OPTS  = ['スクールに通っている','会社のサークル','学校の部活・サークル','テニス仲間とコートを借りる'];
+var AREA_OPTS  = ['東京','神奈川','千葉','埼玉','その他関東圏','関東圏外'];
+var ENV_OPTS   = ['スクールに通っている','会社のサークル','学校の部活・サークル','テニス仲間とコートを借りる'];
+var COACH_OPTS = ['知っていて、レッスンも受けたことがある','知っているがレッスンを受けたことはない','前回のイベントで知った','今回のイベントで初めて知った','その他'];
+var SRC_OPTS   = ['公式SNS','コーチSNS','LINEでのお知らせ','知人・友人の紹介','Google検索','その他'];
+var RSN_OPTS   = ['コーチのレッスンを受けてみたかった','無料イベントだった','テニス仲間に誘われた','テニスイベントに興味があった','その他'];
 
 // ========== 初期化 ==========
 
@@ -243,15 +247,27 @@ function renderForm() {
       var dateLine  = '📅 ' + ev.eventDate + (ev.eventTime ? '　🕐 ' + h(ev.eventTime) : '');
       var venueLine = ev.venue ? '<span>📍 ' + h(ev.venue) + '</span>' : '';
       var descLine  = ev.description ? '<div class="ev-desc">' + h(ev.description) + '</div>' : '';
-      return '<label class="ev-opt">' +
-        '<input type="checkbox" name="ev" value="' + i + '">' +
+      var perEvQ =
+        '<div class="fg" style="margin-bottom:12px"><label class="fl">コーチのレッスンについて<span class="req">*</span></label>' +
+        '<div class="rlist">' + radioHtml('coach_' + i, COACH_OPTS, '') + '</div></div>' +
+        '<div class="fg" style="margin-bottom:12px"><label class="fl">このイベントを知ったきっかけ<span class="req">*</span><span class="sec-note">複数選択可</span></label>' +
+        '<div class="clist">' + checkboxHtml('src_' + i, SRC_OPTS, []) + '</div></div>' +
+        '<div class="fg"><label class="fl">参加応募のきっかけ<span class="req">*</span><span class="sec-note">複数選択可</span></label>' +
+        '<div class="clist">' + checkboxHtml('rsn_' + i, RSN_OPTS, []) + '</div></div>';
+      return '<div class="ev-wrap">' +
+        '<label class="ev-opt">' +
+        '<input type="checkbox" name="ev" value="' + i + '" onchange="onEventToggle(' + i + ')">' +
         '<div>' +
           '<div class="ev-name">' + h(ev.name) + '</div>' +
           '<div class="ev-meta">' + coachLine + '<span>' + dateLine + '</span>' + venueLine + '</div>' +
           descLine +
           '<div class="ev-deadline">募集締切：' + ev.closingDate + '</div>' +
         '</div>' +
-      '</label>';
+        '</label>' +
+        '<div id="ev_detail_' + i + '" class="ev-detail" style="display:none">' +
+        perEvQ +
+        '</div>' +
+      '</div>';
     }).join('');
   }
 
@@ -283,12 +299,6 @@ function renderForm() {
     '<div class="card">' +
       '<div class="sec-label">📅 今回の応募内容<span class="sec-note">毎回入力</span></div>' +
       '<div class="fg"><label class="fl">応募するイベント<span class="sec-note">複数選択可・任意</span></label>' + evHtml + '</div>' +
-      '<div class="fg"><label class="fl">コーチのレッスンについて<span class="req">*</span></label>' +
-        '<div class="rlist">' + radioHtml('coach', ['知っていて、レッスンも受けたことがある','知っているがレッスンを受けたことはない','前回のイベントで知った','今回のイベントで初めて知った','その他'], '') + '</div></div>' +
-      '<div class="fg"><label class="fl">イベントを知ったきっかけ<span class="req">*</span><span class="sec-note">複数選択可</span></label>' +
-        '<div class="clist">' + checkboxHtml('src', ['公式SNS','コーチSNS','LINEでのお知らせ','知人・友人の紹介','Google検索','その他'], []) + '</div></div>' +
-      '<div class="fg"><label class="fl">参加応募のきっかけ<span class="req">*</span><span class="sec-note">複数選択可</span></label>' +
-        '<div class="clist">' + checkboxHtml('rsn', ['コーチのレッスンを受けてみたかった','無料イベントだった','テニス仲間に誘われた','テニスイベントに興味があった','その他'], []) + '</div></div>' +
     '</div>' +
 
     // 利用規約
@@ -447,6 +457,22 @@ function validateParticipant(p, idx, errs) {
 
 // ========== 送信 ==========
 
+function onEventToggle(idx) {
+  var cb     = document.querySelector('input[name="ev"][value="' + idx + '"]');
+  var detail = document.getElementById('ev_detail_' + idx);
+  if (!cb || !detail) return;
+  var checked = cb.checked;
+  detail.style.display = checked ? '' : 'none';
+  var label = cb.closest('.ev-opt');
+  if (label) {
+    label.style.borderRadius = checked ? '8px 8px 0 0' : '';
+    label.style.borderColor  = checked ? '#9de0b4' : '';
+  }
+  if (!checked) {
+    detail.querySelectorAll('input').forEach(function(el){ el.checked = false; });
+  }
+}
+
 function doSubmit() {
   var btn = document.getElementById('sbtn'), gerr = document.getElementById('gerr');
   gerr.style.display = 'none';
@@ -461,9 +487,6 @@ function doSubmit() {
   }
 
   var evIdxs = chk('ev');
-  var coach  = rv('coach');
-  var srcs   = chk('src');
-  var rsns   = chk('rsn');
   var tos    = document.getElementById('tos').checked;
   var media  = document.getElementById('mediaCons').checked;
 
@@ -471,11 +494,13 @@ function doSubmit() {
   validateParticipant(mainP, 1, errs);
   additionals.forEach(function(p, i){ validateParticipant(p, i + 2, errs); });
 
-  if (evIdxs.length > 0) {
-    if (!coach) errs.push('コーチのレッスンについて回答してください。');
-    if (srcs.length === 0) errs.push('イベントを知ったきっかけを選択してください。');
-    if (rsns.length === 0) errs.push('参加応募のきっかけを選択してください。');
-  }
+  evIdxs.forEach(function(i) {
+    var idx    = parseInt(i);
+    var evName = eventsData[idx] ? eventsData[idx].name : ('イベント' + (idx + 1));
+    if (!rv('coach_' + idx)) errs.push('「' + evName + '」コーチのレッスンについて回答してください。');
+    if (chk('src_' + idx).length === 0) errs.push('「' + evName + '」イベントを知ったきっかけを選択してください。');
+    if (chk('rsn_' + idx).length === 0) errs.push('「' + evName + '」参加応募のきっかけを選択してください。');
+  });
   if (!tos)   errs.push('利用規約への同意が必要です。');
   if (!media) errs.push('撮影・インタビューへの協力同意が必要です。');
 
@@ -488,7 +513,14 @@ function doSubmit() {
 
   btn.disabled = true; btn.textContent = '送信中...';
 
-  var selEvs = evIdxs.map(function(i){ return eventsData[parseInt(i)]; });
+  var selEvs = evIdxs.map(function(i) {
+    var idx = parseInt(i);
+    return Object.assign({}, eventsData[idx], {
+      coachKnowledge: rv('coach_' + idx),
+      eventSource:    chk('src_' + idx),
+      applyReason:    chk('rsn_' + idx),
+    });
+  });
 
   fetch(GAS_URL, {
     method: 'POST',
@@ -511,9 +543,6 @@ function doSubmit() {
       tennisEnv:     mainP.tennisEnv,
       additionalParticipants: additionals,
       selectedEvents:  selEvs,
-      coachKnowledge:  coach,
-      eventSource:     srcs,
-      applyReason:     rsns,
     })
   })
   .then(function(r){ return r.json(); })
