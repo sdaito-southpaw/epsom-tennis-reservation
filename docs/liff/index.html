@@ -121,7 +121,7 @@ window.addEventListener('load', function() {
       });
       return Promise.race([
         Promise.all([
-          fetch(GAS_URL + '?action=getEvents').then(function(r){ return r.json(); }),
+          fetch(GAS_URL + '?action=getEvents&userId=' + encodeURIComponent(userId)).then(function(r){ return r.json(); }),
           fetch(GAS_URL + '?action=getMember&userId=' + encodeURIComponent(userId)).then(function(r){ return r.json(); })
         ]),
         fetchTimeout
@@ -258,11 +258,17 @@ function renderForm() {
         '<div class="clist">' + checkboxHtml('src_' + i, SRC_OPTS, []) + '</div></div>' +
         '<div class="fg"><label class="fl">参加応募のきっかけ<span class="req">*</span><span class="sec-note">複数選択可</span></label>' +
         '<div class="clist">' + checkboxHtml('rsn_' + i, RSN_OPTS, []) + '</div></div>';
+      var appliedBadge = ev.alreadyApplied
+        ? ' <span style="background:#198754;color:#fff;border-radius:4px;padding:1px 7px;font-size:11px;font-weight:bold;vertical-align:middle">応募済み</span>'
+        : '';
+      var evCheckbox = ev.alreadyApplied
+        ? '<input type="checkbox" name="ev" value="' + i + '" disabled>'
+        : '<input type="checkbox" name="ev" value="' + i + '" onchange="onEventToggle(' + i + ')">';
       return '<div class="ev-wrap">' +
         '<label class="ev-opt">' +
-        '<input type="checkbox" name="ev" value="' + i + '" onchange="onEventToggle(' + i + ')">' +
+        evCheckbox +
         '<div>' +
-          '<div class="ev-name">' + h(ev.name) + '</div>' +
+          '<div class="ev-name">' + h(ev.name) + appliedBadge + '</div>' +
           '<div class="ev-meta">' + coachLine + '<span>' + dateLine + '</span>' + venueLine + '</div>' +
           descLine +
           '<div class="ev-deadline">募集締切：' + ev.closingDate + '</div>' +
