@@ -12,7 +12,9 @@ function doPost(e) {
 
     // LINE Webhookイベント処理
     for (const event of (body.events || [])) {
-      if (event.type === 'message' && event.message.type === 'text') {
+      if (event.type === 'postback') {
+        handlePostback(event);
+      } else if (event.type === 'message' && event.message.type === 'text') {
         const text = event.message.text.trim();
         if (text === '応募') {
           handleOubo(event);
@@ -102,17 +104,24 @@ function handleOuboStatus(event) {
 
     let status = '';
 
-    // 当落シートB列でUser IDを検索
+    // 当落シートB列でUser IDを検索（LIFF応募・Google Form応募の両方が入る）
     const resultSheet = getSheet(ev.resultSheetName);
     if (resultSheet) {
       const resultData = resultSheet.getDataRange().getValues();
       for (let i = 1; i < resultData.length; i++) {
-        if (resultData[i][1] === userId) {
-          const result = resultData[i][2];
+        if (String(resultData[i][1]) === userId) {
+          const result = String(resultData[i][2] || '');
           if (result === '当選') {
-            status = '応募済み（当選）';
+            const conf = String(resultData[i][9] || '');
+            if (conf === '確認済') status = '応募済み（当選・参加確定）';
+            else if (conf === '確認待ち') status = '応募済み（当選・参加確認待ち）';
+            else status = '応募済み（当選）';
           } else if (result === '落選') {
             status = '応募済み（落選）';
+          } else if (result === 'キャンセル') {
+            status = '応募済み（キャンセル）';
+          } else {
+            status = '応募済み（当落発表前）';
           }
           break;
         }
@@ -154,4 +163,78 @@ function handleOuboStatus(event) {
   }
 
   logAction(userId, '応募状況照会', '', '');
+}
+
+// postbackイベントのルーティング（参加確認ボタン）
+function handlePostback(event) {
+  const params = {};
+  (event.postback.data || '').split('&').forEach(function(pair) {
+    const idx = pair.indexOf('=');
+    if (idx > 0) params[pair.slice(0, idx)] = decodeURIComponent(pair.slice(idx + 1));
+  });
+
+  const { action, sheet: sheetName, userId: baseUserId } = params;
+  const replyToken = event.replyToken;
+  if (!action || !sheetName || !baseUserId) return;
+
+  if (action === 'confirm') {
+    handleParticipationConfirm(replyToken, sheetName, baseUserId);
+  } else if (action === 'cancel') {
+    handleParticipationCancel(replyToken, sheetName, baseUserId);
+  }
+}
+
+// 「参加します」postback処理：J列を「確認済」に更新
+function handleParticipationConfirm(replyToken, sheetName, baseUserId) {
+  const sheet = getSheet(sheetName);
+  if (!sheet) { replyMessage(replyToken, '処理中にエラーが発生しました。'); return; }
+
+  const data = sheet.getDataRange().getValues();
+  let updated = 0;
+  for (let i = 1; i < data.length; i++) {
+    const uid = String(data[i][1] || '');
+    if (uid.replace(/_p\d+$/, '') === baseUserId && String(data[i][2]) === '当選') {
+      sheet.getRange(i + 1, 10).setValue('確認済'); // J列
+      updated++;
+    }
+  }
+
+  const eventName = sheetName.replace(/_当落$/, '');
+  if (updated > 0) {
+    replyMessage(replyToken,
+      `【参加確定】\n「${eventName}」へのご参加を確認しました！\n当日お会いできることを楽しみにしております 🎾`
+    );
+    logAction(baseUserId, '参加確認', eventName, '');
+  } else {
+    replyMessage(replyToken, '既に処理済みか、対象のデータが見つかりませんでした。');
+  }
+}
+
+// 「キャンセルします」postback処理：C列を「キャンセル」・J列を「キャンセル」に更新してスタッフ通知
+function handleParticipationCancel(replyToken, sheetName, baseUserId) {
+  const sheet = getSheet(sheetName);
+  if (!sheet) { replyMessage(replyToken, '処理中にエラーが発生しました。'); return; }
+
+  const data = sheet.getDataRange().getValues();
+  const canceledNames = [];
+  for (let i = 1; i < data.length; i++) {
+    const uid = String(data[i][1] || '');
+    if (uid.replace(/_p\d+$/, '') === baseUserId && String(data[i][2]) === '当選') {
+      sheet.getRange(i + 1, 3).setValue('キャンセル');  // C列：結果
+      sheet.getRange(i + 1, 10).setValue('キャンセル'); // J列：参加確認
+      const name = String(data[i][0] || '');
+      if (name) canceledNames.push(name);
+    }
+  }
+
+  const eventName = sheetName.replace(/_当落$/, '');
+  if (canceledNames.length > 0) {
+    replyMessage(replyToken,
+      `【キャンセル受付】\n「${eventName}」へのご参加をキャンセルしました。\nご連絡いただきありがとうございます。またのご参加をお待ちしております。`
+    );
+    notifyStaff(`❌ キャンセル連絡\nイベント: ${eventName}\nお名前: ${canceledNames.join('、')}\n繰り上げ選定をご確認ください。`);
+    logAction(baseUserId, 'キャンセル', eventName, canceledNames.join('、'));
+  } else {
+    replyMessage(replyToken, '既に処理済みか、対象のデータが見つかりませんでした。');
+  }
 }

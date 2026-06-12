@@ -7,7 +7,8 @@ function doGet(e) {
 
   // LIFF向けJSON API（GitHub PagesのHTMLからfetch()で呼び出す）
   if (action === 'getEvents') {
-    return liffApiResponse(getLiffEventsJson());
+    const userId = e && e.parameter && e.parameter.userId;
+    return liffApiResponse(getLiffEventsJson(userId));
   }
   if (action === 'getMember') {
     const userId = e && e.parameter && e.parameter.userId;
@@ -89,23 +90,44 @@ function liffApiResponse(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// LIFF向けイベント一覧を返す（募集終了日が今日以降のもの・詳細フィールド含む）
-function getLiffEventsJson() {
+// LIFF向けイベント一覧を返す（応募開始日・締切日でフィルタ済み）
+// userIdが渡された場合はalreadyAppliedフラグも付与する
+function getLiffEventsJson(userId) {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return getAllEvents()
-      .filter(ev => !ev.closingDate || ev.closingDate >= today)
-      .map(ev => ({
-        name:            ev.name,
-        resultSheetName: ev.resultSheetName,
-        eventDate:       ev.eventDate   ? Utilities.formatDate(ev.eventDate,   'Asia/Tokyo', 'yyyy/MM/dd') : '',
-        closingDate:     ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
-        eventTime:       ev.eventTime   || '',
-        venue:           ev.venue       || '',
-        coachName:       ev.coachName   || '',
-        description:     ev.description || '',
-      }));
+    const filtered = getAllEvents()
+      .filter(ev => (!ev.openingDate || ev.openingDate <= today) && (!ev.closingDate || ev.closingDate >= today));
+
+    // 応募済みシート名のセットを構築
+    const appliedSheets = new Set();
+    if (userId) {
+      const baseUserId = userId.replace(/_p\d+$/, '');
+      for (const ev of filtered) {
+        const sheet = getSheet(ev.resultSheetName);
+        if (!sheet || sheet.getLastRow() <= 1) continue;
+        const data = sheet.getDataRange().getValues();
+        for (let i = 1; i < data.length; i++) {
+          const uid = String(data[i][1] || '');
+          if (uid === userId || uid.replace(/_p\d+$/, '') === baseUserId) {
+            appliedSheets.add(ev.resultSheetName);
+            break;
+          }
+        }
+      }
+    }
+
+    return filtered.map(ev => ({
+      name:            ev.name,
+      resultSheetName: ev.resultSheetName,
+      eventDate:       formatDateWithDay(ev.eventDate),
+      closingDate:     ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
+      eventTime:       ev.eventTime   || '',
+      venue:           ev.venue       || '',
+      coachName:       ev.coachName   || '',
+      description:     ev.description || '',
+      alreadyApplied:  appliedSheets.has(ev.resultSheetName),
+    }));
   } catch (err) {
     Logger.log('getLiffEventsJson error: ' + err.toString());
     return [];
@@ -139,8 +161,9 @@ function getEventsData() {
 
     return {
       name: ev.name,
-      eventDate:   ev.eventDate   ? Utilities.formatDate(ev.eventDate,   'Asia/Tokyo', 'yyyy/MM/dd') : '',
-      closingDate: ev.closingDate ? Utilities.formatDate(ev.closingDate, 'Asia/Tokyo', 'yyyy/MM/dd') : '',
+      eventDate:    formatDateWithDay(ev.eventDate),
+      closingDate:  ev.closingDate  ? Utilities.formatDate(ev.closingDate,  'Asia/Tokyo', 'yyyy/MM/dd') : '',
+      openingDate:  ev.openingDate  ? Utilities.formatDate(ev.openingDate,  'Asia/Tokyo', 'yyyy/MM/dd') : '',
       appSheetName: ev.appSheetName,
       resultSheetName: ev.resultSheetName,
       eventTime:   ev.eventTime   || '',
@@ -157,6 +180,25 @@ function getApplicants(appSheetName, resultSheetName) {
   const resultSheet = getSheet(resultSheetName);
   if (!resultSheet || resultSheet.getLastRow() <= 1) return [];
 
+  // 会員マスタからテニス情報マップを作成（User ID → 年齢・性別・レベル等）
+  const memberMap = {};
+  const membersSheet = getSheet(SHEET.MEMBERS);
+  if (membersSheet && membersSheet.getLastRow() > 1) {
+    const mData = membersSheet.getDataRange().getValues();
+    for (let i = 1; i < mData.length; i++) {
+      const uid = String(mData[i][1] || '');
+      if (uid) {
+        memberMap[uid] = {
+          age:           String(mData[i][6]  || ''),
+          gender:        String(mData[i][7]  || ''),
+          tennisLevel:   String(mData[i][8]  || ''),
+          tennisFreq:    String(mData[i][13] || ''),
+          tennisHistory: String(mData[i][14] || ''),
+        };
+      }
+    }
+  }
+
   // 応募シートから応募日時マップを作成（Google Form経由の応募）
   const appDateMap = {};
   const appSheet = getSheet(appSheetName);
@@ -172,20 +214,72 @@ function getApplicants(appSheetName, resultSheetName) {
     }
   }
 
+  const winCountMap = buildWinCountMap();
+
   const data = resultSheet.getDataRange().getValues();
   const applicants = [];
   for (let i = 1; i < data.length; i++) {
     const userId = String(data[i][1] || '');
     if (!userId) continue;
+    // 応募日時: Google Form応募シートに記録があればそれを優先、なければ当落シートI列（LIFF応募日時）を使用
+    let appliedAt = appDateMap[userId] || '';
+    if (!appliedAt && data[i][8]) {
+      try { appliedAt = Utilities.formatDate(new Date(data[i][8]), 'Asia/Tokyo', 'MM/dd HH:mm'); } catch(e) {}
+    }
+    const mInfo = memberMap[userId] || {};
+    const baseUserId = userId.replace(/_p\d+$/, '');
     applicants.push({
-      name:      String(data[i][0] || ''),
+      name:           String(data[i][0] || ''),
       userId,
-      appliedAt: appDateMap[userId] || '',
-      result:    String(data[i][2] || ''),
-      sent:      String(data[i][3] || ''),
+      appliedAt,
+      result:         String(data[i][2] || ''),
+      sent:           String(data[i][3] || ''),
+      coachKnowledge: String(data[i][5] || ''),
+      confirmation:   String(data[i][9] || ''),
+      winCount:       winCountMap[baseUserId] || 0,
+      age:            mInfo.age           || '',
+      gender:         mInfo.gender        || '',
+      tennisLevel:    mInfo.tennisLevel   || '',
+      tennisFreq:     mInfo.tennisFreq    || '',
+      tennisHistory:  mInfo.tennisHistory || '',
     });
   }
   return applicants;
+}
+
+// 全当落シートを横断して各UserIDの当選回数を集計する（_p2/_p3は基底IDに統合）
+function buildWinCountMap() {
+  const sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  const map = {};
+  for (const sheet of sheets) {
+    if (!sheet.getName().endsWith('_当落')) continue;
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const uid = String(data[i][1] || '');
+      if (uid && String(data[i][2] || '') === '当選') {
+        const base = uid.replace(/_p\d+$/, '');
+        map[base] = (map[base] || 0) + 1;
+      }
+    }
+  }
+  return map;
+}
+
+// 複数の当落結果を一括で書き込む（results: [{userId, result}, ...]）
+function setResultsBatch(resultSheetName, results) {
+  if (!results || results.length === 0) return { success: false, error: '結果が指定されていません。' };
+  const sheet = getSheet(resultSheetName);
+  if (!sheet) return { success: false, error: 'シートが見つかりません。' };
+  const data = sheet.getDataRange().getValues();
+  const resultMap = {};
+  results.forEach(r => { resultMap[r.userId] = r.result; });
+  for (let i = 1; i < data.length; i++) {
+    const uid = String(data[i][1]);
+    if (resultMap[uid] !== undefined) {
+      sheet.getRange(i + 1, 3).setValue(resultMap[uid]);
+    }
+  }
+  return { success: true, count: results.length };
 }
 
 // 当落シートの指定User IDの行のC列に当落を書き込む
@@ -304,11 +398,43 @@ function getMembersData() {
       tennisArea:    String(data[i][15] || ''),
       tennisEnv:     String(data[i][16] || ''),
       email:         String(data[i][9]  || ''),
-      phone:         String(data[i][10] || ''),
+      phone:         String(data[i][10] || '').replace(/^(\d{9,10})$/, '0$1'),
       registeredAt: data[i][0] ? Utilities.formatDate(new Date(data[i][0]), 'Asia/Tokyo', 'yyyy/MM/dd') : '',
     });
   }
   return members;
+}
+
+// 指定User IDの全イベント応募履歴を返す
+function getMemberHistory(userId) {
+  try {
+    const events = getAllEvents();
+    const history = [];
+    for (const ev of events) {
+      const resultSheet = getSheet(ev.resultSheetName);
+      if (!resultSheet || resultSheet.getLastRow() <= 1) continue;
+      const data = resultSheet.getDataRange().getValues();
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][1]) === userId) {
+          let appliedAt = '';
+          if (data[i][8]) {
+            try { appliedAt = Utilities.formatDate(new Date(data[i][8]), 'Asia/Tokyo', 'MM/dd HH:mm'); } catch(e) {}
+          }
+          history.push({
+            eventName: ev.name,
+            eventDate: formatDateWithDay(ev.eventDate),
+            result:    String(data[i][2] || '未処理'),
+            appliedAt,
+          });
+          break;
+        }
+      }
+    }
+    return { success: true, history };
+  } catch (err) {
+    Logger.log('getMemberHistory error: ' + err.toString());
+    return { success: false, error: err.toString() };
+  }
 }
 
 // ===== HTMLの生成 =====
@@ -330,6 +456,7 @@ function getDashboardHtml() {
 '.status-当選{color:#198754;font-weight:bold}' +
 '.status-落選{color:#dc3545}' +
 '.status-未処理{color:#6c757d}' +
+'.status-キャンセル{color:#6f42c1}' +
 '#spinner{display:none}' +
 '</style>' +
 '</head>' +
@@ -357,12 +484,18 @@ function getDashboardHtml() {
 '<div class="row g-2">' +
 '<div class="col-12"><label class="form-label fw-bold">イベント名<span class="text-danger">*</span></label>' +
 '<input type="text" class="form-control" id="ne_name" placeholder="コーチAレッスン 7月15日"></div>' +
-'<div class="col-6"><label class="form-label fw-bold">開催日<span class="text-danger">*</span></label>' +
-'<input type="text" class="form-control" id="ne_date" placeholder="2026/07/15"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">応募開始日</label>' +
+'<input type="date" class="form-control" id="ne_opening"><div class="form-text">空欄にするとすぐ表示</div></div>' +
 '<div class="col-6"><label class="form-label fw-bold">募集終了日<span class="text-danger">*</span></label>' +
-'<input type="text" class="form-control" id="ne_closing" placeholder="2026/07/10"></div>' +
+'<input type="date" class="form-control" id="ne_closing"></div>' +
+'<div class="col-6"><label class="form-label fw-bold">開催日<span class="text-danger">*</span></label>' +
+'<input type="date" class="form-control" id="ne_date"></div>' +
 '<div class="col-6"><label class="form-label fw-bold">開催時間</label>' +
-'<input type="text" class="form-control" id="ne_time" placeholder="10:00〜16:00"></div>' +
+'<div class="d-flex align-items-center gap-1">' +
+'<input type="time" class="form-control" id="ne_time_start">' +
+'<span class="px-1">〜</span>' +
+'<input type="time" class="form-control" id="ne_time_end">' +
+'</div></div>' +
 '<div class="col-6"><label class="form-label fw-bold">開催場所</label>' +
 '<input type="text" class="form-control" id="ne_venue" placeholder="渋谷テニスコート"></div>' +
 '<div class="col-12"><label class="form-label fw-bold">コーチ名</label>' +
@@ -377,15 +510,34 @@ function getDashboardHtml() {
 '</div></div>' +
 '<div id="eventList" class="row g-2 mb-3"></div>' +
 '<div id="applicantSection" style="display:none">' +
-'<div class="d-flex align-items-center gap-2 mb-2">' +
+'<div class="d-flex align-items-center gap-2 mb-2 flex-wrap">' +
 '<h6 class="mb-0" id="applicantTitle"></h6>' +
-'<button class="btn btn-success btn-sm" onclick="sendNotifications()">📨 当落通知を送信</button>' +
+'<button class="btn btn-success btn-sm ms-auto" onclick="sendNotifications()">📨 当落通知を送信</button>' +
 '<button class="btn btn-outline-secondary btn-sm" onclick="closeApplicants()">✕ 閉じる</button>' +
+'</div>' +
+'<div class="d-flex gap-2 flex-wrap mb-2 p-2 bg-light rounded">' +
+'<button class="btn btn-primary btn-sm" onclick="batchWinLose()">✅ チェックを当選・残りを落選</button>' +
+'<button class="btn btn-outline-success btn-sm" onclick="batchSet(\'当選\')">チェックした人を当選</button>' +
+'<button class="btn btn-outline-danger btn-sm" onclick="batchSet(\'落選\')">チェックした人を落選</button>' +
+'<div class="ms-auto d-flex gap-1">' +
+'<button class="btn btn-outline-secondary btn-sm" onclick="toggleAllChecks(true)">全選択</button>' +
+'<button class="btn btn-outline-secondary btn-sm" onclick="toggleAllChecks(false)">全解除</button>' +
+'</div></div>' +
+'<div class="d-flex flex-wrap gap-2 align-items-end mb-2 p-2 bg-white border rounded">' +
+'<div><div class="small fw-bold mb-1">レベル</div><select class="form-select form-select-sm" id="afLevel" onchange="filterApplicants()" style="min-width:90px"><option value="">全員</option></select></div>' +
+'<div><div class="small fw-bold mb-1">テニス歴</div><select class="form-select form-select-sm" id="afHistory" onchange="filterApplicants()" style="min-width:90px"><option value="">全員</option></select></div>' +
+'<div><div class="small fw-bold mb-1">頻度</div><select class="form-select form-select-sm" id="afFreq" onchange="filterApplicants()" style="min-width:110px"><option value="">全員</option></select></div>' +
+'<div><div class="small fw-bold mb-1">性別</div><select class="form-select form-select-sm" id="afGender" onchange="filterApplicants()" style="min-width:80px"><option value="">全員</option><option value="男性">男性</option><option value="女性">女性</option></select></div>' +
+'<div><div class="small fw-bold mb-1">年齢</div><div class="d-flex align-items-center gap-1"><input type="number" class="form-control form-control-sm" id="afAgeMin" placeholder="下" style="width:56px" onchange="filterApplicants()"><span class="small">〜</span><input type="number" class="form-control form-control-sm" id="afAgeMax" placeholder="上" style="width:56px" onchange="filterApplicants()"></div></div>' +
+'<div><div class="small fw-bold mb-1">コーチ認知</div><select class="form-select form-select-sm" id="afCoach" onchange="filterApplicants()" style="min-width:130px"><option value="">全員</option></select></div>' +
+'<div class="align-self-end"><button class="btn btn-outline-secondary btn-sm" onclick="resetApplicantFilters()">リセット</button></div>' +
+'<div class="align-self-end text-muted small ms-1" id="afCount"></div>' +
 '</div>' +
 '<div class="table-responsive">' +
 '<table class="table table-sm table-hover bg-white">' +
 '<thead class="table-light">' +
-'<tr><th>お名前</th><th>応募日時</th><th>当落</th><th>通知</th><th>操作</th></tr>' +
+'<tr><th style="width:36px"><input type="checkbox" id="chkAll" onchange="toggleAllChecks(this.checked)"></th>' +
+'<th>名前</th><th>年齢</th><th>性別</th><th>レベル</th><th>テニス歴</th><th>頻度</th><th>応募日時</th><th>当落</th><th>当選回数</th><th>コーチ認知</th><th>通知</th><th>操作</th></tr>' +
 '</thead>' +
 '<tbody id="applicantBody"></tbody>' +
 '</table>' +
@@ -456,9 +608,19 @@ function getDashboardHtml() {
 '</div></div>' +
 '<div class="table-responsive">' +
 '<table class="table table-sm table-hover bg-white">' +
-'<thead class="table-light"><tr><th>名前</th><th>フリガナ</th><th>年齢</th><th>性別</th><th>テニスレベル</th><th>登録日</th></tr></thead>' +
+'<thead class="table-light"><tr><th>名前</th><th>フリガナ</th><th>年齢</th><th>性別</th><th>電話番号</th><th>メール</th><th>レベル</th><th>テニス歴</th><th>頻度</th><th>地域</th><th>環境</th><th>登録日</th><th></th></tr></thead>' +
 '<tbody id="membersBody"></tbody>' +
 '</table></div></div></div></div>' +
+
+'<!-- 会員応募履歴モーダル -->' +
+'<div id="memberHistoryOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999" onclick="if(event.target===this)closeMemberHistory()">' +
+'<div style="background:#fff;max-width:580px;margin:60px auto;border-radius:8px;padding:20px;max-height:80vh;overflow-y:auto">' +
+'<div class="d-flex justify-content-between align-items-center mb-3">' +
+'<h6 class="mb-0" id="mhTitle"></h6>' +
+'<button class="btn btn-sm btn-outline-secondary" onclick="closeMemberHistory()">✕ 閉じる</button>' +
+'</div>' +
+'<div id="mhBody"></div>' +
+'</div></div>' +
 
 '</div>' +
 
@@ -469,6 +631,7 @@ function getDashboardHtml() {
 'var membersData=[];' +
 'var mTargetIds=[];' +
 'var membersLoaded=false;' +
+'var allApplicantsData=[];' +
 
 'window.onload=function(){loadEvents();};' +
 
@@ -476,9 +639,12 @@ function getDashboardHtml() {
 'function hideNewEventModal(){document.getElementById("newEventModal").style.display="none";document.getElementById("ne_result").textContent="";}' +
 'function submitNewEvent(){' +
 'var name=document.getElementById("ne_name").value.trim();' +
-'var date=document.getElementById("ne_date").value.trim();' +
-'var closing=document.getElementById("ne_closing").value.trim();' +
-'var time=document.getElementById("ne_time").value.trim();' +
+'var date=document.getElementById("ne_date").value.replace(/-/g,"/");' +
+'var closing=document.getElementById("ne_closing").value.replace(/-/g,"/");' +
+'var opening=document.getElementById("ne_opening").value.replace(/-/g,"/");' +
+'var tS=document.getElementById("ne_time_start").value;' +
+'var tE=document.getElementById("ne_time_end").value;' +
+'var time=tS&&tE?tS+"〜"+tE:(tS||"");' +
 'var venue=document.getElementById("ne_venue").value.trim();' +
 'var coach=document.getElementById("ne_coach").value.trim();' +
 'var desc=document.getElementById("ne_desc").value.trim();' +
@@ -490,7 +656,7 @@ function getDashboardHtml() {
 'else{res.textContent="❌ "+r.error;}' +
 '})' +
 '.withFailureHandler(function(e){res.textContent="❌ "+e.message;})' +
-'.createNewEvent({name:name,eventDate:date,closingDate:closing,eventTime:time,venue:venue,coachName:coach,description:desc});' +
+'.createNewEvent({name:name,eventDate:date,closingDate:closing,openingDate:opening,eventTime:time,venue:venue,coachName:coach,description:desc});' +
 '}' +
 
 'function showTab(t){' +
@@ -527,7 +693,7 @@ function getDashboardHtml() {
 'div.innerHTML="<div class=\'card event-card h-100 border\' onclick=\'selectEvent("+idx+")\'>"+' +
 '"<div class=\'card-body py-2\'>"+' +
 '"<div class=\'fw-bold mb-1\'>"+ev.name+badge+"</div>"+' +
-'"<div class=\'text-muted small\'>開催: "+ev.eventDate+" / 締切: "+ev.closingDate+"</div>"+' +
+'"<div class=\'text-muted small\'>"+(ev.openingDate?"応募開始: "+ev.openingDate+" / ":"")+"開催: "+ev.eventDate+" / 締切: "+ev.closingDate+"</div>"+' +
 'detail+' +
 '"<div class=\'small mt-1\'>応募: "+ev.appCount+"名 ／ 当選: "+ev.winCount+"名 ／ 落選: "+ev.loseCount+"名</div>"+' +
 '"</div></div>";' +
@@ -555,32 +721,120 @@ function getDashboardHtml() {
 '}' +
 
 'function renderApplicants(applicants){' +
+'allApplicantsData=applicants;' +
+'var lvls=[...new Set(applicants.map(function(a){return a.tennisLevel;}).filter(Boolean))].sort();' +
+'var hists=[...new Set(applicants.map(function(a){return a.tennisHistory;}).filter(Boolean))];' +
+'var freqs=[...new Set(applicants.map(function(a){return a.tennisFreq;}).filter(Boolean))];' +
+'var coaches=[...new Set(applicants.map(function(a){return a.coachKnowledge;}).filter(Boolean))];' +
+'var fillSel=function(id,vals){var s=document.getElementById(id);s.innerHTML="<option value=\'\'>全員</option>"+vals.map(function(v){return"<option value=\'"+v+"\'>"+v+"</option>";}).join("");};' +
+'fillSel("afLevel",lvls);fillSel("afHistory",hists);fillSel("afFreq",freqs);fillSel("afCoach",coaches);' +
+'["afGender","afAgeMin","afAgeMax"].forEach(function(id){document.getElementById(id).value="";});' +
+'document.getElementById("afCount").textContent=applicants.length+"名";' +
+'renderApplicantsTable(applicants);' +
+'}' +
+
+'function filterApplicants(){' +
+'var lv=document.getElementById("afLevel").value;' +
+'var hi=document.getElementById("afHistory").value;' +
+'var fr=document.getElementById("afFreq").value;' +
+'var gn=document.getElementById("afGender").value;' +
+'var co=document.getElementById("afCoach").value;' +
+'var amin=parseInt(document.getElementById("afAgeMin").value)||0;' +
+'var amax=parseInt(document.getElementById("afAgeMax").value)||999;' +
+'var filtered=allApplicantsData.filter(function(a){' +
+'if(lv&&a.tennisLevel!==lv)return false;' +
+'if(hi&&a.tennisHistory!==hi)return false;' +
+'if(fr&&a.tennisFreq!==fr)return false;' +
+'if(gn&&a.gender!==gn)return false;' +
+'if(co&&a.coachKnowledge!==co)return false;' +
+'if(a.age){var ag=parseInt(a.age);if(!isNaN(ag)&&(ag<amin||ag>amax))return false;}' +
+'return true;' +
+'});' +
+'document.getElementById("afCount").textContent=filtered.length+"/"+allApplicantsData.length+"名";' +
+'renderApplicantsTable(filtered);' +
+'}' +
+
+'function resetApplicantFilters(){' +
+'["afLevel","afHistory","afFreq","afGender","afCoach","afAgeMin","afAgeMax"].forEach(function(id){document.getElementById(id).value="";});' +
+'document.getElementById("afCount").textContent=allApplicantsData.length+"名";' +
+'renderApplicantsTable(allApplicantsData);' +
+'}' +
+
+'function renderApplicantsTable(applicants){' +
 'var tbody=document.getElementById("applicantBody");' +
 'tbody.innerHTML="";' +
 'if(!applicants||applicants.length===0){' +
-'tbody.innerHTML="<tr><td colspan=\'5\' class=\'text-center text-muted\'>応募者がいません。</td></tr>";return;' +
+'tbody.innerHTML="<tr><td colspan=\'13\' class=\'text-center text-muted\'>応募者がいません。</td></tr>";return;' +
 '}' +
 'applicants.forEach(function(ap){' +
 'var cls=ap.result?"status-"+ap.result:"status-未処理";' +
 'var sentBadge=ap.sent==="済"?"<span class=\'badge bg-success\'>送信済</span>":"<span class=\'badge bg-secondary\'>未送信</span>";' +
+'var confBadge=ap.result==="当選"&&ap.confirmation?' +
+  '(ap.confirmation==="確認済"?"<br><small class=\'text-success\'>✓ 確認済</small>"' +
+  ':ap.confirmation==="確認待ち"?"<br><small class=\'text-warning\'>⏳ 確認待ち</small>":""):"";' +
 'var tr=document.createElement("tr");' +
-'tr.innerHTML="<td>"+ap.name+"</td>"+' +
+'tr.innerHTML="<td><input type=\'checkbox\' class=\'row-check\' data-userid=\'"+ap.userId+"\'></td>"+' +
+'"<td>"+ap.name+"</td>"+' +
+'"<td class=\'text-center small\'>"+ap.age+"</td>"+' +
+'"<td class=\'text-center small\'>"+ap.gender+"</td>"+' +
+'"<td class=\'text-muted small\'>"+ap.tennisLevel+"</td>"+' +
+'"<td class=\'text-muted small\'>"+ap.tennisHistory+"</td>"+' +
+'"<td class=\'text-muted small\'>"+ap.tennisFreq+"</td>"+' +
 '"<td class=\'text-muted small\'>"+ap.appliedAt+"</td>"+' +
-'"<td class=\'"+cls+"\'>"+( ap.result||"未処理")+"</td>"+' +
+'"<td class=\'"+cls+"\'>"+( ap.result||"未処理")+confBadge+"</td>"+' +
+'"<td class=\'text-center small\'>"+(ap.winCount||0)+"</td>"+' +
+'"<td class=\'text-muted small\'>"+ap.coachKnowledge+"</td>"+' +
 '"<td>"+sentBadge+"</td>"+' +
 '"<td>"+' +
-'"<button class=\'btn btn-outline-success btn-sm py-0 me-1\' onclick=\'setResult(\\\""+ap.userId+"\\\",\\\"当選\\\",this)\'>当選</button>"+' +
-'"<button class=\'btn btn-outline-danger btn-sm py-0\' onclick=\'setResult(\\\""+ap.userId+"\\\",\\\"落選\\\",this)\'>落選</button>"+' +
+'"<button class=\'btn "+(ap.result==="当選"?"btn-success":"btn-outline-success")+" btn-sm py-0 me-1\' onclick=\'setResult(\\\""+ap.userId+"\\\",\\\"当選\\\",this)\'>当選</button>"+' +
+'"<button class=\'btn "+(ap.result==="落選"?"btn-danger":"btn-outline-danger")+" btn-sm py-0\' onclick=\'setResult(\\\""+ap.userId+"\\\",\\\"落選\\\",this)\'>落選</button>"+' +
 '"</td>";' +
 'tbody.appendChild(tr);' +
 '});' +
 '}' +
 
+'function toggleAllChecks(on){' +
+'document.querySelectorAll("#applicantBody .row-check").forEach(function(cb){cb.checked=on;});' +
+'var hdr=document.getElementById("chkAll");if(hdr)hdr.checked=on;' +
+'}' +
+
+'function batchWinLose(){' +
+'if(!currentEvent)return;' +
+'var rows=Array.from(document.querySelectorAll("#applicantBody tr"));' +
+'var results=rows.map(function(tr){var cb=tr.querySelector(".row-check");return cb?{userId:cb.dataset.userid,result:cb.checked?"当選":"落選"}:null;}).filter(Boolean);' +
+'if(results.length===0){alert("応募者がいません。");return;}' +
+'var wc=results.filter(function(r){return r.result==="当選";}).length;' +
+'var lc=results.filter(function(r){return r.result==="落選";}).length;' +
+'if(!confirm("当選: "+wc+"名 / 落選: "+lc+"名\\nこの内容で確定しますか？"))return;' +
+'spin(true);' +
+'google.script.run' +
+'.withSuccessHandler(function(res){spin(false);if(res.success){loadApplicants(currentEvent.appSheetName,currentEvent.resultSheetName);loadEvents();}else{alert("エラー: "+res.error);}})' +
+'.withFailureHandler(function(e){spin(false);alert("エラー: "+e.message);})' +
+'.setResultsBatch(currentEvent.resultSheetName,results);' +
+'}' +
+
+'function batchSet(result){' +
+'if(!currentEvent)return;' +
+'var checked=Array.from(document.querySelectorAll("#applicantBody .row-check:checked"));' +
+'if(checked.length===0){alert("対象者を選択してください。");return;}' +
+'var results=checked.map(function(cb){return{userId:cb.dataset.userid,result:result};});' +
+'if(!confirm(checked.length+"名を"+result+"にしますか？"))return;' +
+'spin(true);' +
+'google.script.run' +
+'.withSuccessHandler(function(res){spin(false);if(res.success){loadApplicants(currentEvent.appSheetName,currentEvent.resultSheetName);loadEvents();}else{alert("エラー: "+res.error);}})' +
+'.withFailureHandler(function(e){spin(false);alert("エラー: "+e.message);})' +
+'.setResultsBatch(currentEvent.resultSheetName,results);' +
+'}' +
+
 'function setResult(userId,result,btn){' +
 'if(!currentEvent)return;' +
 'btn.disabled=true;' +
+'var td=btn.closest("td");' +
+'td.querySelectorAll("button").forEach(function(b){b.classList.remove("btn-success","btn-danger");b.classList.add(b.textContent==="当選"?"btn-outline-success":"btn-outline-danger");});' +
+'btn.classList.remove(result==="当選"?"btn-outline-success":"btn-outline-danger");' +
+'btn.classList.add(result==="当選"?"btn-success":"btn-danger");' +
 'google.script.run' +
-'.withSuccessHandler(function(res){btn.disabled=false;if(res.success){loadApplicants(currentEvent.appSheetName,currentEvent.resultSheetName);}else{alert("エラー: "+res.error);}})' +
+'.withSuccessHandler(function(res){btn.disabled=false;if(res.success){loadApplicants(currentEvent.appSheetName,currentEvent.resultSheetName);}else{btn.disabled=false;alert("エラー: "+res.error);}})' +
 '.withFailureHandler(function(e){btn.disabled=false;alert("エラー: "+e.message);})' +
 '.setResult(currentEvent.resultSheetName,userId,result);' +
 '}' +
@@ -643,8 +897,25 @@ function getDashboardHtml() {
 
 'function renderMembersTable(members){' +
 'var tbody=document.getElementById("membersBody");' +
-'if(!members||members.length===0){tbody.innerHTML="<tr><td colspan=\'5\' class=\'text-center text-muted\'>会員データがありません。</td></tr>";return;}' +
-'tbody.innerHTML=members.map(function(m){return"<tr><td>"+m.name+"</td><td class=\'text-muted\'>"+m.furigana+"</td><td>"+m.age+"</td><td>"+m.gender+"</td><td>"+m.tennisLevel+"</td><td class=\'text-muted small\'>"+m.registeredAt+"</td></tr>";}).join("");' +
+'if(!members||members.length===0){tbody.innerHTML="<tr><td colspan=\'13\' class=\'text-center text-muted\'>会員データがありません。</td></tr>";return;}' +
+'tbody.innerHTML=members.map(function(m){' +
+'var uid=m.userId.replace(/"/g,"&quot;");var nm=m.name.replace(/"/g,"&quot;");' +
+'return"<tr>"+' +
+'"<td>"+m.name+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.furigana+"</td>"+' +
+'"<td class=\'text-center\'>"+m.age+"</td>"+' +
+'"<td>"+m.gender+"</td>"+' +
+'"<td class=\'small\'>"+m.phone+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.email+"</td>"+' +
+'"<td class=\'small\'>"+m.tennisLevel+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.tennisHistory+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.tennisFreq+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.tennisArea+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.tennisEnv+"</td>"+' +
+'"<td class=\'text-muted small\'>"+m.registeredAt+"</td>"+' +
+'"<td><button class=\'btn btn-outline-primary btn-sm py-0\' onclick=\'showMemberHistory(\\\""+uid+"\\\",\\\""+nm+"\\\")\'>履歴</button></td>"+' +
+'"</tr>";' +
+'}).join("");' +
 '}' +
 
 'function filterMembers(){' +
@@ -677,6 +948,28 @@ function getDashboardHtml() {
 '.withFailureHandler(function(e){spin(false);alert("エラー: "+e.message);})' +
 '.sendBroadcast(mTargetIds,message);' +
 '}' +
+'function showMemberHistory(userId,name){' +
+'document.getElementById("mhTitle").textContent=name+" の応募履歴";' +
+'document.getElementById("mhBody").innerHTML="<div class=\'text-muted small\'>読み込み中...</div>";' +
+'document.getElementById("memberHistoryOverlay").style.display="";' +
+'google.script.run' +
+'.withSuccessHandler(function(res){' +
+'if(!res.success){document.getElementById("mhBody").innerHTML="<p class=\'text-danger\'>エラー: "+res.error+"</p>";return;}' +
+'if(res.history.length===0){document.getElementById("mhBody").innerHTML="<p class=\'text-muted\'>応募履歴はありません。</p>";return;}' +
+'var trs=res.history.map(function(h){' +
+'var cls=h.result==="当選"?"text-success fw-bold":h.result==="落選"?"text-danger":"text-muted";' +
+'return"<tr><td>"+h.eventName+"</td><td class=\'text-muted small\'>"+h.eventDate+"</td><td class=\'text-muted small\'>"+h.appliedAt+"</td><td class=\'"+cls+"\'>"+h.result+"</td></tr>";' +
+'}).join("");' +
+'document.getElementById("mhBody").innerHTML=' +
+'"<table class=\'table table-sm\'>"+' +
+'"<thead class=\'table-light\'><tr><th>イベント名</th><th>開催日</th><th>応募日</th><th>結果</th></tr></thead>"+' +
+'"<tbody>"+trs+"</tbody></table>";' +
+'})' +
+'.withFailureHandler(function(e){document.getElementById("mhBody").innerHTML="<p class=\'text-danger\'>エラー: "+e.message+"</p>";})' +
+'.getMemberHistory(userId);' +
+'}' +
+'function closeMemberHistory(){document.getElementById("memberHistoryOverlay").style.display="none";}' +
+
 '</script>' +
 '</body></html>';
 }

@@ -77,7 +77,7 @@ function onFormSubmit(e) {
     let resultSheet = ss.getSheetByName(resultSheetName);
     if (!resultSheet) {
       resultSheet = ss.insertSheet(resultSheetName);
-      resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ']);
+      resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ', '応募日時', '参加確認']);
       resultSheet.setFrozenRows(1);
     }
     resultSheet.appendRow([name, userId, '', '', '', '', '', '']);

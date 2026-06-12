@@ -28,34 +28,59 @@ function sendResults() {
 }
 
 // メニューからもダッシュボードからも呼び出せる送信処理の共通実装
+// 同一LINEアカウントからの複数人応募は1通にまとめて送信し、各参加者の名前を付ける
 function sendResultsCore(sheet) {
   const sheetName = sheet.getName();
   const messages = getResultMessages(sheetName);
   const data = sheet.getDataRange().getValues();
-  let winCount = 0;
-  let loseCount = 0;
 
+  // 送信対象行を基底UserIDでグループ化（_p2, _p3 サフィックスを除いた実際のLINE User ID単位）
+  const groups = {};
   for (let i = 1; i < data.length; i++) {
-    const userId = data[i][1]; // B列：User ID
-    const result = data[i][2]; // C列：結果
-    const sent   = data[i][3]; // D列：送信済みフラグ
-
-    if (sent === '済') continue;
+    const userId = String(data[i][1] || '');
+    const result = String(data[i][2] || '');
+    const sent   = String(data[i][3] || '');
+    if (!userId || sent === '済') continue;
     if (result !== '当選' && result !== '落選') continue;
-    if (!userId) continue;
 
-    const message = result === '当選' ? messages.win : messages.lose;
-    pushMessage(userId, message);
+    const baseUserId = userId.replace(/_p\d+$/, '');
+    if (!groups[baseUserId]) groups[baseUserId] = [];
+    groups[baseUserId].push({ rowIdx: i, name: String(data[i][0] || ''), result });
+  }
 
-    sheet.getRange(i + 1, 4).setValue('済');
-    sheet.getRange(i + 1, 5).setValue(new Date());
+  let winCount = 0, loseCount = 0, pushCount = 0;
 
-    logAction(userId, result === '当選' ? '当落通知_当選' : '当落通知_落選', sheetName.replace('_当落', ''), '');
+  for (const baseUserId of Object.keys(groups)) {
+    const participants = groups[baseUserId];
 
-    if (result === '当選') winCount++;
-    else loseCount++;
+    // 参加者ごとにメッセージブロックを生成し、複数人なら区切り線でつなぐ
+    const blocks = participants.map(p => {
+      const body = p.result === '当選' ? messages.win : messages.lose;
+      return (p.name ? p.name + ' 様\n' : '') + body;
+    });
+    const finalMessage = blocks.join('\n\n──────────\n\n');
 
-    if ((winCount + loseCount) % 10 === 0) Utilities.sleep(1000);
+    // 当選者がいる場合は参加確認ボタン（Quick Reply）付きで送信
+    const hasWinners = participants.some(p => p.result === '当選');
+    if (hasWinners) {
+      pushMessageWithQuickReply(baseUserId, finalMessage, buildParticipationQuickReply(sheetName, baseUserId));
+    } else {
+      pushMessage(baseUserId, finalMessage);
+    }
+    pushCount++;
+    if (pushCount % 10 === 0) Utilities.sleep(1000);
+
+    for (const p of participants) {
+      sheet.getRange(p.rowIdx + 1, 4).setValue('済');
+      sheet.getRange(p.rowIdx + 1, 5).setValue(new Date());
+      if (p.result === '当選') {
+        sheet.getRange(p.rowIdx + 1, 10).setValue('確認待ち'); // J列：参加確認
+        winCount++;
+      } else {
+        loseCount++;
+      }
+      logAction(baseUserId, p.result === '当選' ? '当落通知_当選' : '当落通知_落選', sheetName.replace('_当落', ''), p.name);
+    }
   }
 
   return { winCount, loseCount };

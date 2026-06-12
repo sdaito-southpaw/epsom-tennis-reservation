@@ -80,7 +80,7 @@ function setupSpreadsheet() {
 // ダッシュボードからイベントを新規作成する（google.script.runから呼び出す）
 function createNewEvent(data) {
   try {
-    const { name, eventDate, closingDate, eventTime, venue, coachName, description } = data;
+    const { name, eventDate, closingDate, openingDate, eventTime, venue, coachName, description } = data;
     if (!name || !eventDate || !closingDate) {
       return { success: false, error: 'イベント名・開催日・募集終了日は必須です。' };
     }
@@ -92,6 +92,11 @@ function createNewEvent(data) {
     if (isNaN(evDateObj.getTime())) return { success: false, error: '開催日の形式が正しくありません（YYYY/MM/DD）。' };
     const closingDateObj = new Date(closingDate);
     if (isNaN(closingDateObj.getTime())) return { success: false, error: '募集終了日の形式が正しくありません（YYYY/MM/DD）。' };
+    let openingDateObj = null;
+    if (openingDate) {
+      openingDateObj = new Date(openingDate);
+      if (isNaN(openingDateObj.getTime())) return { success: false, error: '応募開始日の形式が正しくありません（YYYY/MM/DD）。' };
+    }
 
     // 同名イベントの重複チェック
     const configData = configSheet.getDataRange().getValues();
@@ -111,14 +116,14 @@ function createNewEvent(data) {
     let resultSheet = ss.getSheetByName(resultSheetName);
     if (!resultSheet) {
       resultSheet = ss.insertSheet(resultSheetName);
-      resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ']);
+      resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ', '応募日時', '参加確認']);
       resultSheet.setFrozenRows(1);
     }
 
-    // 設定シートに行を追加（G〜J列に詳細情報）
+    // 設定シートに行を追加（G〜K列に詳細情報）
     configSheet.appendRow([
       name, evDateObj, closingDateObj, appSheetName, '', '',
-      eventTime || '', venue || '', coachName || '', description || '',
+      eventTime || '', venue || '', coachName || '', description || '', openingDateObj || '',
     ]);
 
     return {
@@ -203,7 +208,7 @@ function setupNewEvent() {
   let resultSheet = ss.getSheetByName(resultSheetName);
   if (!resultSheet) {
     resultSheet = ss.insertSheet(resultSheetName);
-    resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ']);
+    resultSheet.appendRow(['お名前', 'User ID', '結果', '送信済み', '送信日時', 'コーチについて', '流入経路', '応募きっかけ', '応募日時']);
     resultSheet.setFrozenRows(1);
   }
 

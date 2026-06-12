@@ -1,3 +1,13 @@
+// 日付に曜日を付けてフォーマット（例: 2025/06/15 (日)）
+function formatDateWithDay(date) {
+  if (!date) return '';
+  const days = ['日', '月', '火', '水', '木', '金', '土'];
+  const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy/MM/dd');
+  // ISO weekday: 1=月 ... 7=日 → %7 で配列インデックスに変換
+  const dayIdx = parseInt(Utilities.formatDate(date, 'Asia/Tokyo', 'u')) % 7;
+  return dateStr + ' (' + days[dayIdx] + ')';
+}
+
 // 紛らわしい文字（O・0・I・1）を除いた英数字8桁の受付コードを生成
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -33,10 +43,11 @@ function getAllEvents() {
     const venue        = String(data[i][7] || '').trim();  // H列：開催場所
     const coachName    = String(data[i][8] || '').trim();  // I列：コーチ名
     const description  = String(data[i][9] || '').trim();  // J列：イベント内容
+    const openingDate  = data[i][10] ? new Date(data[i][10]) : null;  // K列：応募開始日
     const resultSheetName = appSheetName
       ? appSheetName.replace('_応募', '_当落')
       : name.replace(/[/?\*[\]:\\]/g, '').replace(/\s/g, '') + '_当落';
-    events.push({ name, eventDate, closingDate, appSheetName, resultSheetName, winMsg, loseMsg, eventTime, venue, coachName, description });
+    events.push({ name, eventDate, closingDate, openingDate, appSheetName, resultSheetName, winMsg, loseMsg, eventTime, venue, coachName, description });
   }
   return events;
 }
@@ -86,6 +97,40 @@ function pushMessage(to, text) {
     to,
     messages: [{ type: 'text', text }],
   });
+}
+
+// Quick Reply付きプッシュ送信（当選通知の参加確認ボタンに使用）
+function pushMessageWithQuickReply(to, text, quickReply) {
+  const msg = { type: 'text', text };
+  if (quickReply) msg.quickReply = quickReply;
+  return linePost('push', { to, messages: [msg] });
+}
+
+// 参加確認用Quick Replyオブジェクトを生成（postbackにシート名とuserIdを埋め込む）
+function buildParticipationQuickReply(sheetName, userId) {
+  const enc = encodeURIComponent;
+  return {
+    items: [
+      {
+        type: 'action',
+        action: {
+          type: 'postback',
+          label: '参加します',
+          data: 'action=confirm&sheet=' + enc(sheetName) + '&userId=' + enc(userId),
+          displayText: '参加します',
+        },
+      },
+      {
+        type: 'action',
+        action: {
+          type: 'postback',
+          label: 'キャンセルします',
+          data: 'action=cancel&sheet=' + enc(sheetName) + '&userId=' + enc(userId),
+          displayText: 'キャンセルします',
+        },
+      },
+    ],
+  };
 }
 
 // スタッフグループへ通知（STAFF_GROUP_IDが未設定の場合はスキップ）
